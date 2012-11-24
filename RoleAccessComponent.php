@@ -99,7 +99,7 @@ class RoleAccessComponent extends Component {
     /**
      * Returns full path to the current user's role.
      * 
-     * @param string $role Optional role name
+     * @param string $roleName Optional role name
      * @return array Ordered array representing path
      */
     public function getRole($roleName=null) {
@@ -117,13 +117,13 @@ class RoleAccessComponent extends Component {
      * Get parameters assigned to the specified action.
      * 
      * @param string $action
-     * @param string $role Optional role name
+     * @param string $roleName Optional role name
      * @return array
      */
-    public function getParams($action, $role=null) {
+    public function getParams($action, $roleName=null) {
         $ref = new ReflectionMethod($this->_controller, $action);
         $doc = $ref->getDocComment();
-        preg_match_all('/^\s*\*\s*\@role\.' . ($role === null ? '(?P<role>[^\.\s]+)' : $role)
+        preg_match_all('/^\s*\*\s*\@role\.' . ($roleName === null ? '(?P<role>[^\.\s]+)' : $roleName)
             . '\.?(?(?<=\.)(?P<param>.*?))[^\S\n]+(?P<value>.+?)\s/im',
             $doc, $out, PREG_SET_ORDER);
 
@@ -131,14 +131,14 @@ class RoleAccessComponent extends Component {
         foreach($out as $i) {
             $param = empty($i['param']) ? 'access' : $i['param'];
 
-            if($role === null) {
+            if($roleName === null) {
                 $params[$i['role']][$param] = $i['value'];
             }
             else {
                 $params[$param] = $i['value'];
             }
         }
-        if($role === null && isset($this->_params[$action])) {
+        if($roleName === null && isset($this->_params[$action])) {
             foreach($this->_params[$action] as $role => $p) {
                 if(isset($params[$role])) {
                     $params[$role] = array_merge($params[$role], $p);
@@ -148,8 +148,8 @@ class RoleAccessComponent extends Component {
                 }
             }
         }
-        elseif($role !== null && isset($this->_params[$action][$role])) {
-            $params = array_merge($params, $this->_params[$action][$role]);
+        elseif($roleName !== null && isset($this->_params[$action][$roleName])) {
+            $params = array_merge($params, $this->_params[$action][$roleName]);
         }
         return $params;
     }
@@ -158,24 +158,24 @@ class RoleAccessComponent extends Component {
      * Set access to action for a given role.
      * 
      * @param string $action
-     * @param string $role
+     * @param string $roleName
      * @param string $access allow|deny
      * @return void
      */
-    public function setAccess($action, $role, $access) {
-        $this->_params[$action][$role]['access'] = $access;
+    public function setAccess($action, $roleName, $access) {
+        $this->_params[$action][$roleName]['access'] = $access;
     }
     
     /**
      * Redirect to other action for a given role.
      * 
      * @param string $action
-     * @param string $role
+     * @param string $roleName
      * @param string $destAction Destination action
      * @return void
      */
-    public function setAction($action, $role, $destAction) {
-        $this->_params[$action][$role]['action'] = $destAction;
+    public function setAction($action, $roleName, $destAction) {
+        $this->_params[$action][$roleName]['action'] = $destAction;
     }
     
     /**
@@ -185,7 +185,8 @@ class RoleAccessComponent extends Component {
      * @return void
      */
     public function dispatch($action) {
-        
+        $role = $this->getRole();
+        print_r($this->getParams($action));
     }
     
     public function __construct(ComponentCollection $collection, $settings = array()) {

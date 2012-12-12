@@ -86,6 +86,27 @@ class RoleAccessComponent extends Component {
         return false;
     }
 
+    protected function _parseParams($action, $roleName=null) {
+        $ref = new ReflectionMethod($this->_controller, $action);
+        $doc = $ref->getDocComment();
+        preg_match_all('/^\s*\*\s*\@role\.' . ($roleName === null ? '(?P<role>[^\.\s]+)' : $roleName)
+            . '\.?(?(?<=\.)(?P<param>.*?))[^\S\n]+(?P<value>.+?)\s/im',
+            $doc, $out, PREG_SET_ORDER);
+
+        $params = array();
+        foreach($out as $i) {
+            $param = empty($i['param']) ? 'access' : $i['param'];
+
+            if($roleName === null) {
+                $params[$i['role']][$param] = $i['value'];
+            }
+            else {
+                $params[$param] = $i['value'];
+            }
+        }
+        return $params;
+    }
+
     /**
      * Get the current user's role name, 'public' if user isn't logged in.
      * 
@@ -121,23 +142,8 @@ class RoleAccessComponent extends Component {
      * @return array
      */
     public function getParams($action, $roleName=null) {
-        $ref = new ReflectionMethod($this->_controller, $action);
-        $doc = $ref->getDocComment();
-        preg_match_all('/^\s*\*\s*\@role\.' . ($roleName === null ? '(?P<role>[^\.\s]+)' : $roleName)
-            . '\.?(?(?<=\.)(?P<param>.*?))[^\S\n]+(?P<value>.+?)\s/im',
-            $doc, $out, PREG_SET_ORDER);
-
-        $params = array();
-        foreach($out as $i) {
-            $param = empty($i['param']) ? 'access' : $i['param'];
-
-            if($roleName === null) {
-                $params[$i['role']][$param] = $i['value'];
-            }
-            else {
-                $params[$param] = $i['value'];
-            }
-        }
+        $params = $this->_parseParams($action, $roleName);
+        
         if($roleName === null && isset($this->_params[$action])) {
             foreach($this->_params[$action] as $role => $p) {
                 if(isset($params[$role])) {
@@ -186,7 +192,7 @@ class RoleAccessComponent extends Component {
      */
     public function dispatch($action) {
         $role = $this->getRole();
-        print_r($this->getParams($action));
+        print_r($this->getParams($action, 'admin'));
     }
     
     public function __construct(ComponentCollection $collection, $settings = array()) {

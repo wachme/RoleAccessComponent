@@ -1,23 +1,27 @@
 <?php
 App::uses('Component', 'Controller');
 
+class RoleNotFoundException extends CakeException {
+    protected $_messageTemplate = 'Role %s not found';
+}
+
 /**
  * RoleAccess Component
  * 
  * Component that makes role-based access easy to use in your controller class.
  * 
  * To specify settings for action, simply add to its comment block:
- * @role.<role-name>[.<param>] <value> [<comment>]
+ * @role.<role-name> <value> [<comment>]
  * 
  * Example:
  * @role.admin allow Allow admin access the action
  * @role.user deny Deny user access the action
- * @role.user.access deny The same as above
  * @role.user allow Overwrites the above setting
- * @role.public deny Deny from all unregistered users ('public' is predefined role name)
+ * @role.public deny Deny from all unregistered users ('public' is a predefined role name)
  * 
  * Example:
- * @role.admin.action admin_index Redirect admin to other action
+ * @role.admin role_admin_index Redirect admin to other action ('role_admin_index').
+ * Remember to use prefix for every action that should be invoked only by redirection.
  * 
  * @author Karol Wach
  */
@@ -28,12 +32,6 @@ class RoleAccessComponent extends Component {
      * @var Controller
      */
     protected $_controller;
-    /**
-     * Parameters of actions assigned at runtime.
-     * 
-     * @var array
-     */
-    protected $_params = array();
     
     public $components = array('Session', 'Auth');
 
@@ -41,74 +39,82 @@ class RoleAccessComponent extends Component {
      * Component settings:
      * 
      * - 'roleField' - User model's field storing role name
-     * - 'Roles' - Defines inheritance of roles
-     *   Example:
-     *   'Roles' => array(
-     *      'user' => array(
-     *         'subscriber',  // 'subscriber' inherits from 'user'
-     *         'editor' => array(
-     *           'author' => array(
-     *             'moderator' => array(
-     *               'admin' => 'superadmin' // 'admin' extends moderator privileges
-     *             )
-     *           )
-     *         )
-     *       )
-     *   )
+     * - 'actionPrefix' - Prefix for actions that should be invoked only by redirection
+     * - 'roles' - Existing roles
+     * Example:
+     * 'roles' => array(
+     *   'user',
+     *   'author' => 'user',  // author extends user privileges
+     *   'editor' => 'author,  // editor extends author privileges
+     *   'admin' => 'editor',  // ...
+     *   'super-admin' => 'admin'
+     * )
      */
     public $settings = array(
-        'roleField' => 'role'
+        'roleField' => 'role',
+        'actionPrefix' => 'role_'
     );
 
     /**
-     * Returns full path to the specified role name.
+     * Returns raw parameters assigned to the specified action.
      * 
-     * @param array $set Set within to search
-     * @param string $name Role name
-     * @param callback $cmp Optional comparison function
-     * @return array|false Ordered array representing path or false if not found
+     * @param string $action
+     * @param string $roleName Optional role name
+     * @return array
      */
-    protected function _findRole(array $set, $name, $cmp='strcasecmp') {
-        foreach($set as $k => $v) {
-            if(is_string($k) && is_string($v) && $cmp($v, $name) === 0) {
-                return array($k, $v);
-            }
-            elseif(is_string($k) && $cmp($k, $name) === 0) {
-                return array($k);
-            }
-            elseif(is_string($v) && $cmp($v, $name) === 0) {
-                return array($v);
-            }
-            elseif(is_array($v) && ($sub = $this->_findRole($v, $name)) !== false) {
-                return array_merge(array($k), $sub);
-            }
-        }
-        return false;
-    }
-
-    protected function _parseParams($action, $roleName=null) {
+    protected function _parseParams($action) {
         $ref = new ReflectionMethod($this->_controller, $action);
         $doc = $ref->getDocComment();
-        preg_match_all('/^\s*\*\s*\@role\.' . ($roleName === null ? '(?P<role>[^\.\s]+)' : $roleName)
-            . '\.?(?(?<=\.)(?P<param>.*?))[^\S\n]+(?P<value>.+?)\s/im',
+        preg_match_all('/^\s*\*\s*\@role\.(?P<role>\S+)[^\S\n]+(?P<value>\S+)/im',
             $doc, $out, PREG_SET_ORDER);
 
         $params = array();
         foreach($out as $i) {
-            $param = empty($i['param']) ? 'access' : $i['param'];
-
-            if($roleName === null) {
-                $params[$i['role']][$param] = $i['value'];
-            }
-            else {
-                $params[$param] = $i['value'];
-            }
+            $params[$i['role']] = $i['value'];
         }
         return $params;
     }
 
     /**
-     * Get the current user's role name, 'public' if user isn't logged in.
+     * Returns role's parent (empty string if parent is not defined) or false if not found.
+     * 
+     * @param string $roleName
+     * @return string|booleab
+     */
+    protected function _findRole($roleName) {
+        if(isset($this->settings['roles'][$roleName])) {
+            return $this->settings['roles'][$roleName];
+        }
+        if($roleName == 'public' || is_int(array_search($roleName, $this->settings['roles']))) {
+            return '';
+        }
+        return false;
+    }
+
+    /** 
+     * Returns value assigned to the specified role.
+     * 
+     * @param string $roleName
+     * @param array $params Parsed action parameters
+     * @return string|null
+     */
+    protected function _getValue($roleName, $params) {
+        $role = $this->_findRole($roleName);
+        if($role === false) {
+            throw new RoleNotFoundException(array('roleName' => $roleName));
+        }
+        $value = isset($params[$roleName]) ? $params[$roleName] : null;
+        if($value === null && is_string($role) && !empty($role)) {
+            $extends = $role;
+            if(($inherited = $this->_getValue($extends, $params)) !== null) {
+                $value = $inherited;
+            }
+        }
+        return $value;
+    }
+
+    /**
+     * Get the current user's role, 'public' if user isn't logged in.
      * 
      * @return string
      */
@@ -116,83 +122,52 @@ class RoleAccessComponent extends Component {
         $role = $this->Auth->user($this->settings['roleField']);
         return $role !== null ? $role : 'public';
     }
-
+    
     /**
-     * Returns full path to the current user's role.
-     * 
-     * @param string $roleName Optional role name
-     * @return array Ordered array representing path
-     */
-    public function getRole($roleName=null) {
-        $roleName = $roleName !== null ? $roleName : $this->getRoleName();
-        if($roleName === 'public') {
-            return array('public');
-        }
-        if(($role = $this->_findRole($this->settings['Roles'], $roleName)) !== false) {
-            return $role;
-        }
-        return array($roleName);
-    }
-
-    /**
-     * Get parameters assigned to the specified action.
-     * 
-     * @param string $action
-     * @param string $roleName Optional role name
-     * @return array
-     */
-    public function getParams($action, $roleName=null) {
-        $params = $this->_parseParams($action, $roleName);
-        
-        if($roleName === null && isset($this->_params[$action])) {
-            foreach($this->_params[$action] as $role => $p) {
-                if(isset($params[$role])) {
-                    $params[$role] = array_merge($params[$role], $p);
-                }
-                else {
-                    $params[$role] = $p;
-                }
-            }
-        }
-        elseif($roleName !== null && isset($this->_params[$action][$roleName])) {
-            $params = array_merge($params, $this->_params[$action][$roleName]);
-        }
-        return $params;
-    }
-
-    /**
-     * Set access to action for a given role.
+     * Get value for the specified action and role.
      * 
      * @param string $action
      * @param string $roleName
-     * @param string $access allow|deny
-     * @return void
+     * @return string|null
      */
-    public function setAccess($action, $roleName, $access) {
-        $this->_params[$action][$roleName]['access'] = $access;
+    public function getValue($action, $roleName) {
+        return $this->_getValue($roleName, $this->_parseParams($action));
     }
     
     /**
-     * Redirect to other action for a given role.
+     * Dispatch controller's action using role configuration.
      * 
      * @param string $action
-     * @param string $roleName
-     * @param string $destAction Destination action
-     * @return void
-     */
-    public function setAction($action, $roleName, $destAction) {
-        $this->_params[$action][$roleName]['action'] = $destAction;
-    }
-    
-    /**
-     * Dispatch controller's action using role parameters.
-     * 
-     * @param $action
      * @return void
      */
     public function dispatch($action) {
-        $role = $this->getRole();
-        print_r($this->getParams($action, 'admin'));
+        if(strpos($action, $this->settings['actionPrefix']) === 0) {
+            throw new PrivateActionException(array(
+                'controller' => $this->_controller->name,
+                'action' => $action
+            ));
+        }
+        $role = $this->getRoleName();
+        $value = $this->getValue($action, $role);
+        if(is_string($value)) {
+            if($value == 'allow') {
+                $this->Auth->allow();
+            }
+            elseif($value == 'deny') {
+                $this->Auth->deny();
+            }
+            elseif(method_exists($this->_controller, $value)) {
+                // $this->_controller->setAction($value) doesn't work correctly - invokes action twice (CakePHP v2.2.2)
+                $this->_controller->request->params['action'] = $value;
+                $this->_controller->view = $value;
+            }
+            else {
+                throw new MissingActionException(array(
+                    'controller' => $this->_controller->name,
+                    'action' => $value 
+                ));
+            }
+        }
     }
     
     public function __construct(ComponentCollection $collection, $settings = array()) {
